@@ -1,0 +1,1 @@
+This demo is an integration wrapper and does not include LLM-Subtrans source code. LLM-Subtrans is MIT-licensed; review its upstream LICENSE and third-party notices when deploying or redistributing it: https://github.com/machinewrapped/llm-subtrans
