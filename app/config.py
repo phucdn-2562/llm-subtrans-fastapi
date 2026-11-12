@@ -21,6 +21,17 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 TRANSLATION_MODEL = os.getenv("TRANSLATION_MODEL", "gemini-2.5-flash")
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gemini-3.5-transcribe")
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "Gemini")
+# Optional rates for the configured models; unset/invalid values disable estimates.
+TOKEN_PRICES_USD_PER_MILLION = {
+    "translation": (
+        os.getenv("TRANSLATION_INPUT_USD_PER_MILLION", ""),
+        os.getenv("TRANSLATION_OUTPUT_USD_PER_MILLION", ""),
+    ),
+    "transcription": (
+        os.getenv("TRANSCRIPTION_INPUT_USD_PER_MILLION", ""),
+        os.getenv("TRANSCRIPTION_OUTPUT_USD_PER_MILLION", ""),
+    ),
+}
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "1024"))
 MAX_WORKERS = int(os.getenv("MAX_WORKERS", "2"))
 API_KEY = os.getenv("SERVICE_API_KEY", "").strip()

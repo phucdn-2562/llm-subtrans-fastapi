@@ -3,9 +3,11 @@ import signal
 import subprocess
 import tempfile
 import logging
+import time
 from pathlib import Path
 
 from app import config
+from app.usage import log_usage
 
 
 class SubtransError(RuntimeError):
@@ -28,12 +30,13 @@ def _base_env():
     return env
 
 
-def _run(command: list[str], cwd: Path, env: dict):
+def _run(command: list[str], cwd: Path, env: dict, *, operation: str, model: str, job_id: str):
     """Disk-backed logs; terminate subprocess group on timeout (Linux/POSIX)."""
-    with tempfile.TemporaryFile(mode="w+b", dir=config.TEMP_DIR) as log:
+    started = time.monotonic()
+    with tempfile.TemporaryFile(mode="w+b", dir=config.TEMP_DIR) as process_log:
         proc = subprocess.Popen(
             command, cwd=str(cwd), env=env,
-            stdout=log, stderr=subprocess.STDOUT,
+            stdout=process_log, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
         try:
@@ -53,11 +56,16 @@ def _run(command: list[str], cwd: Path, env: dict):
                 proc.wait()
             log.error("LLM-Subtrans timed out after %ss", config.SUBPROCESS_TIMEOUT_SECONDS)
             raise SubtransError("ENGINE_TIMEOUT") from exc
+        finally:
+            log_usage(
+                process_log, operation=operation, model=model, job_id=job_id,
+                returncode=proc.returncode, elapsed_seconds=time.monotonic() - started,
+            )
         if proc.returncode != 0:
-            log.seek(0, os.SEEK_END)
-            size = log.tell()
-            log.seek(max(0, size - 6000))
-            message = log.read().decode("utf-8", errors="replace")
+            process_log.seek(0, os.SEEK_END)
+            size = process_log.tell()
+            process_log.seek(max(0, size - 6000))
+            message = process_log.read().decode("utf-8", errors="replace")
             # Avoid leaking credentials passed as CLI options through tool logs.
             message = message.replace(config.GEMINI_API_KEY, "[REDACTED]") if config.GEMINI_API_KEY else message
             log.error("LLM-Subtrans exited %s: %s", proc.returncode, message[-6000:])
@@ -81,7 +89,11 @@ def transcribe(media_path: Path, output_path: Path, language: str | None = None)
         command.append("--diarize")
     if language:
         command += ["--language", language]
-    _run(command, config.LLM_SUBTRANS_DIR, _base_env())
+    if config.TRANSCRIPTION_PROVIDER.casefold() == "gemini":
+        # Preserve upstream arguments and processing; observe usage in the child only.
+        command.insert(1, str(Path(__file__).with_name("transcription_cli.py")))
+    _run(command, config.LLM_SUBTRANS_DIR, _base_env(), operation="transcription",
+         model=config.TRANSCRIPTION_MODEL, job_id=output_path.parent.name)
     if not output_path.is_file():
         raise SubtransError("TRANSCRIPTION_OUTPUT_MISSING")
     return output_path
@@ -97,7 +109,8 @@ def translate(subtitle_path: Path, output_path: Path, target_language: str):
         "--target-language", target_language,
         "-o", str(output_path), str(subtitle_path),
     ]
-    _run(command, config.LLM_SUBTRANS_DIR, _base_env())
+    _run(command, config.LLM_SUBTRANS_DIR, _base_env(), operation="translation",
+         model=config.TRANSLATION_MODEL, job_id=output_path.parent.name)
     if not output_path.is_file():
         raise SubtransError("TRANSLATION_OUTPUT_MISSING")
     return output_path
