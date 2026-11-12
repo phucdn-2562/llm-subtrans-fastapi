@@ -1,122 +1,103 @@
 import os
+import signal
 import subprocess
+import tempfile
+import logging
 from pathlib import Path
+
 from app import config
 
+
 class SubtransError(RuntimeError):
-    pass
+    """Safe machine-readable code for job responses; internal details stay in logs."""
+    def __init__(self, code: str):
+        self.code = code
+        super().__init__(code)
+
+
+log = logging.getLogger(__name__)
+
 
 def _base_env():
     if not config.GEMINI_API_KEY:
-        raise SubtransError("GEMINI_API_KEY is not configured in .env")
-    if not config.LLM_SUBTRANS_DIR.exists():
-        raise SubtransError(
-            f"LLM-Subtrans repository not found: {config.LLM_SUBTRANS_DIR}. "
-            "Run scripts/setup_local.sh first."
-        )
+        raise SubtransError("GEMINI_NOT_CONFIGURED")
+    if not config.LLM_SUBTRANS_DIR.is_dir():
+        raise SubtransError("ENGINE_NOT_INSTALLED")
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
     return env
 
+
 def _run(command: list[str], cwd: Path, env: dict):
-    completed = subprocess.run(
-        command,
-        cwd=str(cwd),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=None,
-        check=False,
-    )
-    if completed.returncode != 0:
-        details = (completed.stderr or completed.stdout or "Unknown LLM-Subtrans error")[-6000:]
-        raise SubtransError(details)
-    return completed.stdout
+    """Disk-backed logs; terminate subprocess group on timeout (Linux/POSIX)."""
+    with tempfile.TemporaryFile(mode="w+b", dir=config.TEMP_DIR) as log:
+        proc = subprocess.Popen(
+            command, cwd=str(cwd), env=env,
+            stdout=log, stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        try:
+            proc.wait(timeout=config.SUBPROCESS_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                proc.wait()
+            log.error("LLM-Subtrans timed out after %ss", config.SUBPROCESS_TIMEOUT_SECONDS)
+            raise SubtransError("ENGINE_TIMEOUT") from exc
+        if proc.returncode != 0:
+            log.seek(0, os.SEEK_END)
+            size = log.tell()
+            log.seek(max(0, size - 6000))
+            message = log.read().decode("utf-8", errors="replace")
+            # Avoid leaking credentials passed as CLI options through tool logs.
+            message = message.replace(config.GEMINI_API_KEY, "[REDACTED]") if config.GEMINI_API_KEY else message
+            log.error("LLM-Subtrans exited %s: %s", proc.returncode, message[-6000:])
+            raise SubtransError("ENGINE_EXECUTION_FAILED")
+
 
 def transcribe(media_path: Path, output_path: Path, language: str | None = None):
-    """
-    Uses LLM-Subtrans' documented scripts/transcribe.py CLI.
-    Gemini cloud transcription is selected explicitly.
-    """
     script = config.LLM_SUBTRANS_DIR / "scripts" / "transcribe.py"
-    if not script.exists():
-        raise SubtransError(f"Transcription script not found: {script}")
+    if not script.is_file():
+        raise SubtransError("TRANSCRIPTION_SCRIPT_MISSING")
     command = [
         config.PYTHON_BIN, str(script), str(media_path),
         "--provider", config.TRANSCRIPTION_PROVIDER,
-        "--apikey", config.GEMINI_API_KEY,
         "--model", config.TRANSCRIPTION_MODEL,
         "--format", output_path.suffix.lstrip("."),
         "--output", str(output_path),
-        "--align",
-        "--diarize",
     ]
+    if config.ENABLE_ALIGN:
+        command.append("--align")
+    if config.ENABLE_DIARIZE:
+        command.append("--diarize")
     if language:
         command += ["--language", language]
     _run(command, config.LLM_SUBTRANS_DIR, _base_env())
-    if not output_path.exists():
-        raise SubtransError(
-            "Transcription command finished but output file was not created. "
-            "Check the installed LLM-Subtrans transcription provider/model."
-        )
+    if not output_path.is_file():
+        raise SubtransError("TRANSCRIPTION_OUTPUT_MISSING")
     return output_path
 
-def translate(
-    subtitle_path: Path,
-    output_path: Path,
-    target_language: str
-):
-    script = (
-        config.LLM_SUBTRANS_DIR
-        / "scripts"
-        / "gemini-subtrans.py"
-    )
 
-    if not script.exists():
-        raise SubtransError(
-            f"Gemini translation script not found: {script}"
-        )
-
+def translate(subtitle_path: Path, output_path: Path, target_language: str):
+    script = config.LLM_SUBTRANS_DIR / "scripts" / "gemini-subtrans.py"
+    if not script.is_file():
+        raise SubtransError("TRANSLATION_SCRIPT_MISSING")
     command = [
-        config.PYTHON_BIN,
-        str(script),
-        "--model",
-        config.TRANSLATION_MODEL,
-        "--target-language",
-        target_language,
-        "-o",
-        str(output_path),
-        str(subtitle_path),
-    ]
-
-    _run(
-        command,
-        config.LLM_SUBTRANS_DIR,
-        _base_env()
-    )
-
-    if not output_path.exists():
-        raise SubtransError(
-            "Translation completed but output file was not created."
-        )
-
-    return output_path
-    """
-    Uses the Gemini-specific CLI generated by installing LLM-Subtrans with
-    the [gemini] extra. Source and output extensions should match.
-    """
-    executable = "gemini-subtrans"
-    command = [
-        executable,
+        config.PYTHON_BIN, str(script),
         "--model", config.TRANSLATION_MODEL,
         "--target-language", target_language,
-        "--output", str(output_path),
-        str(subtitle_path),
+        "-o", str(output_path), str(subtitle_path),
     ]
     _run(command, config.LLM_SUBTRANS_DIR, _base_env())
-    if not output_path.exists():
-        raise SubtransError(
-            "Translation command finished but output file was not created. "
-            "Verify gemini-subtrans is installed in the same Python environment."
-        )
+    if not output_path.is_file():
+        raise SubtransError("TRANSLATION_OUTPUT_MISSING")
     return output_path
