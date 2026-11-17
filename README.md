@@ -140,6 +140,33 @@ If NestJS and this API run in separate Docker containers, do not use `127.0.0.1`
 
 ## Troubleshooting
 
+### Token usage and estimated cost logs
+
+Each CLI invocation writes an `llm_usage` JSON log through Uvicorn, including
+`job_id`, `operation`, `model`, elapsed seconds, return code, input/output/total
+tokens, and USD costs. Summaries are also logged on failure or timeout when the
+engine has emitted usage. Subtitle content and prompts are not included in usage logs.
+
+Set `TRANSLATION_INPUT_USD_PER_MILLION` and
+`TRANSLATION_OUTPUT_USD_PER_MILLION` in `.env` to the prices for your configured
+model and billing tier. The equivalent `TRANSCRIPTION_*` options apply if the
+engine emits transcription token summaries. No default prices are assumed.
+
+`estimated_cost_usd = (input_tokens * input_rate + output_tokens * output_rate) / 1,000,000`.
+`engine_reported_cost_usd` is the CLI-reported cost, kept separately from this
+estimate. Missing usage or missing/invalid rates produce `null`, not zero.
+For Gemini transcription, a local CLI launcher observes the existing
+`_create_interaction` response and emits numeric `response.usage` metadata.
+The wrapper sums all observed chunks and includes thinking tokens in output
+costs (`usage_source: "gemini_response"`). No additional provider call is made,
+and the upstream checkout is not modified. Missing provider metadata remains
+unknown; partial usage is marked `usage_complete: false` and has no cost estimate.
+This adapter relies on the upstream Gemini client's `_create_interaction` method;
+if unavailable after an engine upgrade, the original CLI still runs and logs a warning.
+Translation summaries may exclude rejected/retried responses and Gemini thinking
+tokens. Estimates do not account for cache discounts, modality-specific rates,
+or pricing tiers; they are not a billing statement. Update rates when changing models.
+
 ### `gemini-subtrans: executable not found`
 
 Make sure installation was performed in the same virtual environment used to start FastAPI:
