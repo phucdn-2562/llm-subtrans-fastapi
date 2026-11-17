@@ -20,9 +20,68 @@ from app.subtrans import SubtransError, transcribe, translate
 
 log = logging.getLogger(__name__)
 ALLOWED_MEDIA = {".mp4", ".mkv", ".mov", ".avi", ".mp3", ".wav", ".m4a", ".aac", ".flac", ".webm"}
-ALLOWED_SUBTITLES = {".srt", ".vtt", ".ass", ".ssa"}
+ALLOWED_SUBTITLES = {".srt", ".vtt", ".ass", ".ssa", ".txt"}
 LANGUAGES = {"Dutch", "English", "French", "German", "Italian", "Portuguese", "Spanish"}
 FORMATS = {"srt", "vtt", "ass"}
+
+# Translation-only aliases. Keep existing full-name inputs and CLI arguments unchanged.
+TRANSLATION_LANGUAGE_CODES = {
+    "nl": "Dutch",
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "ms": "Malay",
+    "tr": "Turkish",
+    "ru": "Russian",
+    "pl": "Polish",
+    "sv": "Swedish",
+    "da": "Danish",
+    "no": "Norwegian",
+    "fi": "Finnish",
+    "el": "Greek",
+    "cs": "Czech",
+    "hu": "Hungarian",
+    "ro": "Romanian",
+    "uk": "Ukrainian",
+    "he": "Hebrew",
+    "ca": "Catalan",
+    "hr": "Croatian",
+    "sk": "Slovak",
+    "bg": "Bulgarian",
+    "fil": "Filipino",
+    "bn": "Bengali",
+    "ta": "Tamil",
+    "ur": "Urdu",
+}
+
+
+def resolve_translation_language(value: str) -> str | None:
+    """Accept ISO-style codes or full names; pass full names to LLM-Subtrans."""
+    code = value.strip().lower()
+    if code in TRANSLATION_LANGUAGE_CODES:
+        return TRANSLATION_LANGUAGE_CODES[code]
+    for name in TRANSLATION_LANGUAGE_CODES.values():
+        if code == name.lower():
+            return name
+    return None
+
+
+# TXT is accepted only when its content is already in SRT cue format.
+SRT_TXT_HEADER = re.compile(
+    r"(?m)^\s*\d+\s*\r?\n\s*\d{2}:\d{2}:\d{2}[,.]\d{3}"
+    r"\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}\s*$"
+)
 
 
 @asynccontextmanager
@@ -74,6 +133,18 @@ async def save_upload(file: UploadFile, directory: Path, allowed: set[str]) -> P
                 await asyncio.to_thread(out.write, chunk)
         if total == 0:
             raise HTTPException(status_code=422, detail="Empty upload")
+        if suffix == ".txt" and allowed is ALLOWED_SUBTITLES:
+            # Upstream Gemini subtitle CLI expects an SRT extension. Preserve
+            # the original bytes/timestamps; only normalize the filename.
+            try:
+                text = destination.read_text(encoding="utf-8-sig")
+            except UnicodeDecodeError:
+                raise HTTPException(status_code=422, detail="TXT must be UTF-8 encoded")
+            if not SRT_TXT_HEADER.search(text):
+                raise HTTPException(status_code=422, detail="TXT must contain SRT-format numbered cues and timestamps")
+            normalized = destination.with_suffix(".srt")
+            destination.rename(normalized)
+            return normalized
         return destination
     except BaseException:
         destination.unlink(missing_ok=True)
@@ -228,9 +299,10 @@ async def create_translation(
     idempotency_key: str | None = Header(default=None, alias='Idempotency-Key'),
 ):
     auth(x_api_key)
-    if targetLanguage not in LANGUAGES:
-        raise HTTPException(status_code=422, detail=f"targetLanguage must be one of {sorted(LANGUAGES)}")
-    return await _accept(file, ALLOWED_SUBTITLES, "translation", _translate_worker, targetLanguage, key=idempotency_key)
+    normalized_language = resolve_translation_language(targetLanguage)
+    if normalized_language is None:
+        raise HTTPException(status_code=422, detail=f"Unsupported targetLanguage; use one of {sorted(TRANSLATION_LANGUAGE_CODES)}")
+    return await _accept(file, ALLOWED_SUBTITLES, "translation", _translate_worker, normalized_language, key=idempotency_key)
 
 
 @app.post("/v1/process", status_code=202)
