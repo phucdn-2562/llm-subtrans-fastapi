@@ -27,6 +27,7 @@ def _base_env():
         raise SubtransError("ENGINE_NOT_INSTALLED")
     env = os.environ.copy()
     env["GEMINI_API_KEY"] = config.GEMINI_API_KEY
+    env["GOOGLE_GEMINI_BASE_URL"] = config.GEMINI_BASE_URL
     return env
 
 

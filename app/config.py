@@ -18,6 +18,7 @@ LLM_SUBTRANS_DIR = Path(
 ).resolve()
 PYTHON_BIN = os.getenv("PYTHON_BIN", os.sys.executable)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://ai-gateway.lutech.vn/llm/gemini").strip()
 TRANSLATION_MODEL = os.getenv("TRANSLATION_MODEL", "gemini-2.5-flash")
 TRANSCRIPTION_MODEL = os.getenv("TRANSCRIPTION_MODEL", "gemini-3.5-transcribe")
 TRANSCRIPTION_PROVIDER = os.getenv("TRANSCRIPTION_PROVIDER", "Gemini")

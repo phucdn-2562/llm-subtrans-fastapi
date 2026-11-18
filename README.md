@@ -30,7 +30,7 @@ This demo is intentionally simple:
 - Python 3.10+
 - FFmpeg and ffprobe
 - Git
-- Google Gemini API key
+- Gemini gateway API key
 
 ## Install
 
@@ -45,7 +45,8 @@ chmod +x scripts/*.sh
 Edit `.env` and set:
 
 ```env
-GEMINI_API_KEY=YOUR_REAL_GEMINI_API_KEY
+GEMINI_API_KEY=YOUR_GATEWAY_API_KEY
+GEMINI_BASE_URL=https://ai-gateway.lutech.vn/llm/gemini
 ```
 
 Start the server:
@@ -190,7 +191,7 @@ If the provider is named differently in that version, update `TRANSCRIPTION_PROV
 
 ### Model not available / quota errors
 
-Check the model ID and API access in Google AI Studio. The project defaults are examples, not a guarantee that every model is enabled for every account. Gemini transcription may have strict rate limits; reduce `MAX_WORKERS` to 1 while testing.
+Check the model ID and API access with the gateway provider. The project defaults are examples, not a guarantee that every model is enabled for every account. Gemini transcription may have strict rate limits; reduce `MAX_WORKERS` to 1 while testing.
 
 ### FFmpeg
 
