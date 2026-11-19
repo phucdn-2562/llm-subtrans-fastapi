@@ -49,3 +49,4 @@ MAX_SUBTITLE_MB = max(1, int(os.getenv("MAX_SUBTITLE_MB", "10")))
 ENABLE_ALIGN = os.getenv("ENABLE_ALIGN", "true").lower() == "true"
 ENABLE_DIARIZE = os.getenv("ENABLE_DIARIZE", "true").lower() == "true"
 JOB_DB_PATH = DATA_DIR / "jobs.sqlite3"
+USAGE_LOG_PATH = DATA_DIR / "logs" / "gemini-usage.jsonl"

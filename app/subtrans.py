@@ -105,7 +105,7 @@ def translate(subtitle_path: Path, output_path: Path, target_language: str):
     if not script.is_file():
         raise SubtransError("TRANSLATION_SCRIPT_MISSING")
     command = [
-        config.PYTHON_BIN, str(script),
+        config.PYTHON_BIN, str(Path(__file__).with_name("translation_cli.py")), str(script),
         "--model", config.TRANSLATION_MODEL,
         "--target-language", target_language,
         "-o", str(output_path), str(subtitle_path),
