@@ -141,6 +141,18 @@ If NestJS and this API run in separate Docker containers, do not use `127.0.0.1`
 
 ## Troubleshooting
 
+### Incoming request logs
+
+Each incoming HTTP request writes a `bridge_http_request` INFO log with its
+method, path and optional `X-Correlation-ID`. This confirms that the request
+reached the Python API; it does not identify which service sent it. Query
+strings, headers and request bodies are excluded. Job status polling also logs
+each request, so frequent polling increases log volume.
+
+When running under PM2, use `pm2 logs <app-name> --lines 100` and look for
+`bridge_http_request`. Send an `X-Correlation-ID` from NestJS to match its
+request with the Python log. Uvicorn must be configured to emit INFO logs.
+
 ### Token usage and estimated cost logs
 
 Each CLI invocation writes an `llm_usage` JSON log through Uvicorn, including
