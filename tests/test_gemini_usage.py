@@ -13,10 +13,39 @@ from unittest.mock import patch
 from app import config
 from app.subtrans import _run, transcribe
 from app.transcription_cli import USAGE_PREFIX, emit_usage, install_observer
+from app.translation_cli import install_observer as install_translation_observer
 from app.usage import log_usage
 
 
 class GeminiUsageTests(unittest.TestCase):
+    def setUp(self):
+        writer = patch("app.usage._write_usage_file")
+        writer.start()
+        self.addCleanup(writer.stop)
+
+    def test_translation_response_logs_thinking_even_when_processing_fails(self):
+        class Client:
+            def _process_gemini_response(self, response):
+                raise ValueError("rejected")
+
+        install_translation_observer(Client)
+        response = SimpleNamespace(usage_metadata=SimpleNamespace(
+            prompt_token_count=100, candidates_token_count=15,
+            thoughts_token_count=5, total_token_count=120))
+        with redirect_stdout(io.StringIO()) as emitted:
+            with self.assertRaises(ValueError):
+                Client()._process_gemini_response(response)
+        with patch.dict(config.TOKEN_PRICES_USD_PER_MILLION, {"translation": ("2", "4")}):
+            with self.assertLogs("uvicorn.error.llm_usage") as logs:
+                log_usage(io.BytesIO(emitted.getvalue().encode()), operation="translation",
+                          model="test", job_id="job", returncode=1, elapsed_seconds=1)
+        summary, request = (json.loads(record.getMessage()) for record in logs.records)
+        self.assertEqual(summary["estimated_cost_usd"], "0.00028")
+        self.assertEqual(request["event"], "gemini_request_usage")
+        self.assertEqual(request["output_tokens"], 20)
+        self.assertEqual(request["thought_tokens"], 5)
+        self.assertEqual(request["estimated_cost_usd"], "0.00028")
+
     def emit(self, usage: object) -> str:
         with redirect_stdout(io.StringIO()) as captured:
             emit_usage(SimpleNamespace(usage=usage, output_text="private transcript"))

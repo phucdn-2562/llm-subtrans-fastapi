@@ -60,6 +60,20 @@ class APITest(unittest.TestCase):
         self.assertEqual(self.client.post("/v1/transcriptions", files={"file": ("a.wav", b"")}).status_code, 422)
         self.assertEqual(self.client.get("/v1/jobs/none").status_code, 404)
 
+    def test_incoming_request_is_logged_without_query_or_credentials(self):
+        with self.assertLogs(main.bridge_log, level="INFO") as logs:
+            response = self.client.get(
+                "/health?secret=query-secret",
+                headers={"X-Correlation-ID": "nestjs-request-123", "X-API-Key": "header-secret"},
+            )
+        self.assertEqual(response.status_code, 200)
+        entry = next(line for line in logs.output if "bridge_http_request" in line)
+        self.assertIn("correlationId=nestjs-request-123", entry)
+        self.assertIn("method=GET", entry)
+        self.assertIn("path='/health'", entry)
+        self.assertNotIn("query-secret", entry)
+        self.assertNotIn("header-secret", entry)
+
 
 class TranslationCompatibilityTests(unittest.TestCase):
     def test_all_language_codes_and_legacy_names(self):

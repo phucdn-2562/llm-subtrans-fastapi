@@ -141,12 +141,33 @@ If NestJS and this API run in separate Docker containers, do not use `127.0.0.1`
 
 ## Troubleshooting
 
+### Incoming request logs
+
+Each incoming HTTP request writes a `bridge_http_request` INFO log with its
+method, path and optional `X-Correlation-ID`. This confirms that the request
+reached the Python API; it does not identify which service sent it. Query
+strings, headers and request bodies are excluded. Job status polling also logs
+each request, so frequent polling increases log volume.
+
+When running under PM2, use `pm2 logs <app-name> --lines 100` and look for
+`bridge_http_request`. Send an `X-Correlation-ID` from NestJS to match its
+request with the Python log. Uvicorn must be configured to emit INFO logs.
+
 ### Token usage and estimated cost logs
 
 Each CLI invocation writes an `llm_usage` JSON log through Uvicorn, including
 `job_id`, `operation`, `model`, elapsed seconds, return code, input/output/total
 tokens, and USD costs. Summaries are also logged on failure or timeout when the
 engine has emitted usage. Subtitle content and prompts are not included in usage logs.
+Each observed Gemini response also writes a `gemini_request_usage` JSON log
+with its token counts and estimated USD cost. These logs are emitted when the
+job subprocess exits and can be matched to the summary using `job_id`.
+The same records are also appended as JSON Lines to
+`DATA_DIR/logs/gemini-usage.jsonl` (by default `data/logs/gemini-usage.jsonl`),
+with a UTC `timestamp` on each line. The file rotates at 10 MiB and retains up
+to five older files; older records are eventually deleted. For example, run
+`tail -f data/logs/gemini-usage.jsonl` to inspect new records. File logging is
+designed for the project's single Uvicorn worker and does not replace billing records.
 
 Set `TRANSLATION_INPUT_USD_PER_MILLION` and
 `TRANSLATION_OUTPUT_USD_PER_MILLION` in `.env` to the prices for your configured
@@ -164,8 +185,12 @@ and the upstream checkout is not modified. Missing provider metadata remains
 unknown; partial usage is marked `usage_complete: false` and has no cost estimate.
 This adapter relies on the upstream Gemini client's `_create_interaction` method;
 if unavailable after an engine upgrade, the original CLI still runs and logs a warning.
-Translation summaries may exclude rejected/retried responses and Gemini thinking
-tokens. Estimates do not account for cache discounts, modality-specific rates,
+Translation observes responses processed by the upstream Gemini client, including
+responses rejected during processing and thinking tokens when reported. Failed
+requests or interrupted streams without usage metadata cannot be accounted for;
+therefore even a complete observed summary may be lower than the provider bill.
+The translation observer also depends on an upstream private method and falls
+back to the engine summary if unavailable. Estimates do not account for cache discounts, modality-specific rates,
 or pricing tiers; they are not a billing statement. Update rates when changing models.
 
 ### `gemini-subtrans: executable not found`

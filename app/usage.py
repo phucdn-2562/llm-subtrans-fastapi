@@ -2,7 +2,10 @@
 import json
 import logging
 import re
+import threading
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from logging.handlers import RotatingFileHandler
 from typing import BinaryIO
 
 from app import config
@@ -14,6 +17,34 @@ log = logging.getLogger("uvicorn.error.llm_usage")
 TOKEN_SUMMARY = re.compile(r"Token usage: (\d+) in / (\d+) out \((\d+) total\)\s*$")
 COST_SUMMARY = re.compile(r"Translation cost: \$(\d+(?:\.\d+)?)\s*$")
 TOKENS_PER_MILLION = Decimal(1_000_000)
+USAGE_LOG_MAX_BYTES = 10 * 1024 * 1024
+USAGE_LOG_BACKUP_COUNT = 5
+_file_log = logging.getLogger("llm_usage_file")
+_file_log.setLevel(logging.INFO)
+_file_log.propagate = False
+_file_handler_lock = threading.Lock()
+
+
+def _write_usage_file(record: dict) -> None:
+    """Write JSON lines separately from Uvicorn's console logging."""
+    try:
+        with _file_handler_lock:
+            if not _file_log.handlers:
+                config.USAGE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                handler = RotatingFileHandler(
+                    config.USAGE_LOG_PATH, maxBytes=USAGE_LOG_MAX_BYTES,
+                    backupCount=USAGE_LOG_BACKUP_COUNT, encoding="utf-8",
+                )
+                _file_log.addHandler(handler)
+        file_record = {"timestamp": datetime.now(timezone.utc).isoformat(), **record}
+        _file_log.info("%s", json.dumps(file_record, ensure_ascii=True))
+    except Exception:
+        log.warning("Could not write Gemini usage log file", exc_info=True)
+
+
+def _emit_usage(record: dict) -> None:
+    log.info("%s", json.dumps(record, ensure_ascii=True))
+    _write_usage_file(record)
 
 
 def _rate(value: str) -> Decimal | None:
@@ -97,7 +128,33 @@ def log_usage(
             "input_usd_per_million": str(input_rate) if input_rate is not None else None,
             "output_usd_per_million": str(output_rate) if output_rate is not None else None,
         }
-        log.info("%s", json.dumps(summary, ensure_ascii=True))
+        _emit_usage(summary)
+        output.seek(0)
+        request_number = 0
+        while line := output.readline(65536):
+            text = line.decode("utf-8", errors="replace")
+            if not text.startswith(USAGE_PREFIX):
+                continue
+            request_number += 1
+            try:
+                usage = json.loads(text[len(USAGE_PREFIX):])
+            except (ValueError, TypeError):
+                usage = {}
+            if not isinstance(usage, dict):
+                usage = {}
+            counts = [usage.get(key) for key in ("input_tokens", "output_tokens", "total_tokens", "thought_tokens")]
+            counts = [count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None for count in counts]
+            request_input, request_output, request_total, request_thought = counts
+            cost = None
+            if request_input is not None and request_output is not None and input_rate is not None and output_rate is not None:
+                cost = str((request_input * input_rate + request_output * output_rate) / TOKENS_PER_MILLION)
+            _emit_usage({
+                "event": "gemini_request_usage", "job_id": job_id, "operation": operation,
+                "model": model, "request_number": request_number,
+                "input_tokens": request_input, "output_tokens": request_output,
+                "total_tokens": request_total, "thought_tokens": request_thought,
+                "currency": "USD", "estimated_cost_usd": cost,
+            })
     except Exception:
         # Observability must never change the outcome of a translation job.
         log.warning("LLM usage summary unavailable for job %s", job_id)

@@ -120,6 +120,8 @@ async def observe_bridge_requests(request: Request, call_next):
     correlation = request.headers.get("x-correlation-id", "")
     correlation = correlation[:80] if re.fullmatch(r"[A-Za-z0-9_-]{1,80}", correlation) else None
     path = request.url.path  # Deliberately exclude query, secrets and subtitle payload.
+    bridge_log.info("bridge_http_request correlationId=%s method=%s path=%r",
+                    correlation, request.method, path)
     try:
         response = await call_next(request)
     except Exception as exc:

@@ -9,10 +9,43 @@ from unittest.mock import patch
 
 from app import config
 from app.subtrans import SubtransError, _run
-from app.usage import log_usage
+from app.usage import _file_log, _write_usage_file, log_usage
 
 
 class UsageTests(unittest.TestCase):
+    def setUp(self):
+        self.file_writer = patch("app.usage._write_usage_file")
+        self.file_writer.start()
+        self.addCleanup(self.file_writer.stop)
+
+    def test_usage_is_written_as_timestamped_json_lines(self):
+        self.file_writer.stop()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "logs" / "usage.jsonl"
+            with patch.object(config, "USAGE_LOG_PATH", path):
+                try:
+                    _write_usage_file({"event": "llm_usage", "job_id": "job"})
+                    _write_usage_file({"event": "gemini_request_usage", "job_id": "job"})
+                    records = [json.loads(line) for line in path.read_text().splitlines()]
+                    self.assertEqual([record["event"] for record in records],
+                                     ["llm_usage", "gemini_request_usage"])
+                    self.assertTrue(all(record["timestamp"].endswith("+00:00") for record in records))
+                finally:
+                    for handler in _file_log.handlers[:]:
+                        _file_log.removeHandler(handler)
+                        handler.close()
+
+    def test_file_error_does_not_prevent_usage_logging(self):
+        self.file_writer.stop()
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(config, "USAGE_LOG_PATH", Path(directory)):
+                with self.assertLogs("uvicorn.error.llm_usage", level="INFO") as captured:
+                    log_usage(io.BytesIO(b"Token usage: 10 in / 5 out (15 total)\n"),
+                              operation="translation", model="test", job_id="job",
+                              returncode=0, elapsed_seconds=1)
+        self.assertEqual(json.loads(captured.records[0].getMessage())["total_tokens"], 15)
+        self.assertTrue(any("Could not write" in record.getMessage() for record in captured.records))
+
     def summary(self, content: bytes, rates=("2", "4")) -> dict:
         with patch.dict(config.TOKEN_PRICES_USD_PER_MILLION, {"translation": rates}):
             with self.assertLogs("uvicorn.error.llm_usage", level="INFO") as captured:
